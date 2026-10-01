@@ -17,6 +17,7 @@ export function registerProjectionRoutes(app: FastifyInstance, deps: ProjectionR
     const startedAt = Date.now();
     const { processedEvents } = await deps.projection.replay();
     const status = await deps.projection.status();
-    return { processedEvents, durationMs: Date.now() - startedAt, ...status };
+    // processedEvents 以重放实际处理的条数为准（status.processedEvents 同值，顺序只是消歧）
+    return { durationMs: Date.now() - startedAt, ...status, processedEvents };
   });
 }

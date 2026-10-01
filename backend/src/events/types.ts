@@ -6,7 +6,12 @@ export interface NewEvent {
 
 /** 已落库的事件：不可变，带聚合内连续版本号与全局序号 */
 export interface StoredEvent {
-  /** 全局递增序号，决定跨聚合的全局消费顺序（投影按它消费） */
+  /**
+   * 全局序号（BIGSERIAL，严格唯一递增）。
+   * 注意：它在 INSERT 执行时取号、事务 COMMIT 后才对其它事务可见，因此跨聚合并发下
+   * 取号顺序 ≠ 提交可见顺序——不能当作"全局消费前缀"的依据，投影按 (aggregateId, version)
+   * 消费（见 docs/projection-consistency.md）。这里仅作高水位/定位用途。
+   */
   globalSeq: number;
   aggregateId: string;
   aggregateType: string;

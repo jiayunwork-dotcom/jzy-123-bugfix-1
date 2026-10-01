@@ -12,7 +12,9 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "stress": "tsx scripts/stress-repro.ts",
+    "stress:replay": "tsx scripts/stress-replay-during-writes.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

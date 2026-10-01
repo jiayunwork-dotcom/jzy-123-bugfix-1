@@ -69,10 +69,21 @@ export default function ProjectionPage() {
         {status && (
           <>
             <p className="hint">
-              投影 <span className="mono">{status.name}</span> · 已消费到全局序号 #
-              {status.lastProcessedSeq} · 共 {status.summary.totalAccounts} 个账户 · 余额汇总{' '}
+              投影 <span className="mono">{status.name}</span> · 已应用事件高水位 #
+              {status.lastProcessedSeq} · 已消费 {status.processedEvents}/{status.eventTotal} 条 · 共{' '}
+              {status.summary.totalAccounts} 个账户 · 余额汇总{' '}
               {formatCents(status.summary.totalBalanceCents)}
             </p>
+            {status.caughtUp ? (
+              <p className="hint" style={{ color: 'var(--success, #1a7f37)' }}>
+                ● 读模型已追平：已应用 {status.processedEvents} 条 = 事件总数 {status.eventTotal}
+              </p>
+            ) : (
+              <p className="hint" style={{ color: 'var(--warning, #b26a00)', fontWeight: 600 }}>
+                ▲ 读模型落后 {status.lagEvents} 条事件（已应用 {status.processedEvents}/
+                {status.eventTotal}）：跟进失败、写入在途或重放进行中都会如此，稍后自动跟进或手动重放即可补齐
+              </p>
+            )}
             <table>
               <thead>
                 <tr>

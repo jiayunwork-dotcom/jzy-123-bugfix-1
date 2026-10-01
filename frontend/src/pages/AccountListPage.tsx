@@ -63,8 +63,15 @@ export default function AccountListPage() {
           <div className="stat-value">{status ? formatCents(status.summary.totalBalanceCents) : '—'}</div>
         </div>
         <div className="card stat">
-          <div className="stat-label">投影已消费到全局序号</div>
-          <div className="stat-value">{status?.lastProcessedSeq ?? '—'}</div>
+          <div className="stat-label">投影消费进度（已应用/事件总数）</div>
+          <div className="stat-value">
+            {status ? `${status.processedEvents}/${status.eventTotal}` : '—'}
+            {status && !status.caughtUp && (
+              <span style={{ color: '#b26a00', fontSize: '0.7em', marginLeft: 8 }}>
+                落后 {status.lagEvents} 条
+              </span>
+            )}
+          </div>
         </div>
       </section>
 

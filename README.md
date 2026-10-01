@@ -75,6 +75,16 @@ cd backend && npm test
 - 命令提交成功后，后端自动让投影**增量消费**新事件；读模型是派生物，滞后时可随时修复。
 - **全量重放**：清空读模型，从头消费整条事件流重新计算。**框架最要命的不变量：重放结果与增量消费结果完全一致**（测试锁定，并与用领域折叠函数独立算出的模型三方对账）。
 
+> **消费依据是「聚合流」而不是全局序号**：`events.global_seq` 在 INSERT 时取号、在 COMMIT
+> 后才对其它事务可见，跨聚合并发下取号顺序 ≠ 提交可见顺序，按全局序号前缀推进会永久跳过
+> 晚提交的事件。增量消费按 `(aggregate_id, version)` 逐流推进，每个流内部版本严格连续、
+> 永无空洞。完整事故复盘、方案对比与正确性论证见 [`docs/projection-consistency.md`](docs/projection-consistency.md)。
+>
+> **落后可见**：读模型接口新增 `eventTotal / processedEvents / lagEvents / caughtUp`，
+> 跟进失败、写入在途或重放进行中都会如实显示落后，绝不再用"已处理序号"谎报追平。
+> 除写后同步跟进外，后端启动时先补一次增量，并带一个可关闭的兜底轮询
+> （`PROJECTION_CATCH_UP_POLL_MS`，默认 1000ms，设为 0 关闭）。
+
 ### 业务校验
 
 所有业务约束（账户必须存在、金额必须为正整数、**余额不能被取成负数**……）都在**生成事件之前**于领域层校验；不合法直接报错，**不产生任何事件**（测试逐条锁定：失败命令后事件流长度不变）。
@@ -101,18 +111,20 @@ backend/
 │   │   ├── rebuilder.ts            # 通用重建器：最近快照 + 剩余事件回放
 │   │   └── accountService.ts       # 命令编排：重建 → 校验 → 追加 → 投影跟进
 │   ├── projections/
-│   │   └── accountProjection.ts    # 读模型投影：增量消费 + 全量重放
+│   │   └── accountProjection.ts    # 读模型投影：按聚合流增量消费 + 全量重放
 │   └── http/
 │       ├── server.ts               # Fastify 实例、统一错误映射
 │       ├── validate.ts             # 请求入参形状校验
 │       └── routes/
 │           ├── aggregateRoutes.ts  # 聚合 / 事件 / 快照接口
 │           └── projectionRoutes.ts # 读模型接口
+├── scripts/                        # 手工压测脚本（并发写入 / 重放与写入并发）
 └── test/                           # 不变量测试（真实 PostgreSQL）
     ├── eventStore.test.ts          #   追加语义、版本连续、区间读取、不存在聚合策略
     ├── concurrency.test.ts         #   同版本并发提交只有一条成功
     ├── snapshot.test.ts            #   快照重建 ≡ 全量重放（逐字段）
     ├── projection.test.ts          #   投影全量重放 ≡ 增量消费
+    ├── projectionConcurrency.test.ts # 多账户并发写入后增量读模型 ≡ 独立回放（漏事件回归）
     ├── immutability.test.ts        #   事件不可改、不可删、顺序不变
     ├── domain.test.ts              #   余额不为负等业务校验，不产生事件
     └── http.test.ts                #   API 流程与错误码
@@ -141,8 +153,8 @@ frontend/
 | POST | `/api/aggregates/:id/commands` | 执行命令（校验后生成并追加事件）。Body: `{command, expectedVersion}` |
 | POST | `/api/aggregates/:id/snapshots` | 手动打快照。Body: `{version?}`（缺省当前版本） |
 | GET | `/api/aggregates/:id/snapshots` | 该聚合的全部快照 |
-| GET | `/api/projection/accounts` | 读模型：账户列表 + 余额汇总 + 消费位点 |
-| POST | `/api/projection/accounts/replay` | 对读模型做全量重放并返回结果 |
+| GET | `/api/projection/accounts` | 读模型：账户列表 + 余额汇总 + 消费位点 + 落后情况（`caughtUp`/`lagEvents`） |
+| POST | `/api/projection/accounts/replay` | 对读模型做全量重放并返回结果（可与写入并发；切点后的事件由增量消费补齐） |
 
 命令类型：`CreateAccount {owner, initialBalanceCents?}`、`DepositMoney {amountCents}`、`WithdrawMoney {amountCents}`。金额一律以**分**为单位的整数。
 
@@ -165,6 +177,7 @@ frontend/
 | 同一聚合并发提交同版本，只能成功一条，其余报冲突 | `test/concurrency.test.ts` |
 | 带快照重建与不带快照全量重放，状态逐字段相等 | `test/snapshot.test.ts` |
 | 投影全量重算与增量消费结果完全一致 | `test/projection.test.ts` |
+| 多账户高并发写入后，增量读模型（不重放）与各账户事件流独立回放逐字段一致；重放与写入并发同样不丢事件；跟进失败时接口如实报落后 | `test/projectionConcurrency.test.ts` |
 | 事件流一旦写入，内容与顺序不被后续操作改变 | `test/immutability.test.ts` |
 | 版本号严格递增连续；版本不连续/范围错误有明确报错 | `test/eventStore.test.ts`、`test/snapshot.test.ts` |
 | 余额不能为负等业务约束在生成事件前校验，不合法不产生事件 | `test/domain.test.ts` |
@@ -176,4 +189,6 @@ frontend/
 - 前端：React 18 + Vite + React Router，无 UI 框架
 - 测试：Vitest，打真实 PostgreSQL
 - 编排：Docker Compose（db / backend / frontend）
-- **范围之外**（按要求不做）：权限与登录、多聚合事务、事件升级（upcasting）、投影的持久化订阅守护进程（当前为写后同步跟进 + 手动/启动重放即可保持一致）
+- **范围之外**（按要求不做）：权限与登录、多聚合事务、事件升级（upcasting）。投影没有独立的
+  持久化订阅守护进程：写后同步跟进 + 启动增量补齐 + 可关闭的兜底轮询（默认 1s）即可保持一致，
+  且任何落后都能从读模型接口直接看出来。

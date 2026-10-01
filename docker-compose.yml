@@ -20,6 +20,8 @@ services:
     environment:
       DATABASE_URL: postgres://es:es@db:5432/event_sourcing
       PORT: '3000'
+      # 读模型兜底跟进轮询间隔（毫秒）；设为 0 关闭（落后仍会通过接口 lagEvents/caughtUp 暴露）
+      PROJECTION_CATCH_UP_POLL_MS: '1000'
     depends_on:
       db:
         condition: service_healthy

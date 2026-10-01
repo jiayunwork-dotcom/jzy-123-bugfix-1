@@ -172,7 +172,53 @@ export class EventStore {
     return (rows as EventRow[]).map(toStoredEvent);
   }
 
-  /** 全局事件流：globalSeq 大于 fromGlobalSeq 的所有事件，按全局序号升序（投影增量消费用） */
+  /**
+   * 单条聚合流：版本号大于 fromVersion 的事件，按版本升序（投影按流增量消费用）。
+   *
+   * 为什么不直接用 loadAllEvents 的全局序号前缀消费？因为 global_seq 是 BIGSERIAL，
+   * 在 INSERT 执行时取号、在事务 COMMIT 后才对其它事务可见。跨聚合并发追加时，
+   * "取号顺序"与"提交可见顺序"不保证一致：后取号的事务可能先提交。
+   * 一个投影事务读到的已提交事件会在全局序号上出现"空洞"（号被在途事务拿走了），
+   * 若直接把检查点推过这些空洞，那些晚提交的事件就被永久跳过。
+   * 而在【单个聚合内部】，同一聚合的追加被 aggregates 行锁串行化，版本号在提交顺序上
+   * 严格递增连续，已提交事件在版本维度上永远没有空洞 —— 所以按 (aggregate, version)
+   * 流消费是安全的。可传入 client 在投影事务内读取。
+   */
+  async loadStreamEvents(aggregateId: string, fromVersion: number, client?: PoolClient): Promise<StoredEvent[]> {
+    const queryable = client ?? this.pool;
+    const { rows } = await queryable.query(
+      `SELECT ${EVENT_COLUMNS} FROM events
+        WHERE aggregate_id = $1 AND version > $2
+        ORDER BY version ASC`,
+      [aggregateId, fromVersion],
+    );
+    return (rows as EventRow[]).map(toStoredEvent);
+  }
+
+  /**
+   * 列出"写侧当前版本高于投影已消费版本"的聚合（投影按流增量消费用，需在事务内调用）。
+   *
+   * 调用方必须以 REPEATABLE READ 单快照事务调用本方法以及随后的 loadStreamEvents()：
+   * 聚合行、位点行与事件行必须来自同一个快照。READ COMMITTED 下每条语句各自取快照，
+   * 高并发时可能先看到 aggregates.current_version=N、随后却读不到对应事件行（实测），
+   * 那会把位点推进到没消费过的版本。聚合的创建与事件在同一事务提交，聚合只增不删，
+   * 因此单快照下"出现在本结果里的流，其 1..current_version 的事件必然可读"。
+   */
+  async listLaggingStreams(projectionName: string, client?: PoolClient): Promise<string[]> {
+    const queryable = client ?? this.pool;
+    const { rows } = await queryable.query(
+      `SELECT a.aggregate_id
+         FROM aggregates a
+         LEFT JOIN projection_stream_positions p
+           ON p.projection_name = $1 AND p.aggregate_id = a.aggregate_id
+        WHERE a.current_version > COALESCE(p.last_version, 0)
+        ORDER BY a.aggregate_id ASC`,
+      [projectionName],
+    );
+    return rows.map((r: { aggregate_id: string }) => r.aggregate_id);
+  }
+
+  /** 全局事件流：globalSeq 大于 fromGlobalSeq 的所有事件，按全局序号升序（仅用于测试/独立对账） */
   async loadAllEvents(fromGlobalSeq = 0, client?: PoolClient): Promise<StoredEvent[]> {
     const queryable = client ?? this.pool;
     const { rows } = await queryable.query(
