@@ -69,10 +69,37 @@ export default function ProjectionPage() {
         {status && (
           <>
             <p className="hint">
-              投影 <span className="mono">{status.name}</span> · 已消费到全局序号 #
-              {status.lastProcessedSeq} · 共 {status.summary.totalAccounts} 个账户 · 余额汇总{' '}
+              投影 <span className="mono">{status.name}</span> · 安全水位 #
+              {status.lastProcessedSeq} / 写侧最新 #{status.latestGlobalSeq} · 共{' '}
+              {status.summary.totalAccounts} 个账户 · 余额汇总{' '}
               {formatCents(status.summary.totalBalanceCents)}
             </p>
+            {!status.caughtUp && (
+              <p className="hint" style={{ color: '#b54708' }}>
+                ⚠ 读模型落后：还有 {status.lagEvents} 条已提交事件未消费
+                {status.laggingStreams.length > 0 && (
+                  <>
+                    {' '}
+                    （账户：
+                    {status.laggingStreams
+                      .slice(0, 10)
+                      .map(
+                        (s) =>
+                          `${s.aggregateId} 缺 ${s.lagEvents} 条（v${s.processedVersion}→v${s.currentVersion}）`,
+                      )
+                      .join('；')}
+                    {status.laggingStreams.length > 10 ? ' …' : ''}）
+                  </>
+                )}
+                ；可点"全量重放"立即修复，或等待下一次写入触发增量跟进。
+              </p>
+            )}
+            {status.caughtUp && status.lastProcessedSeq < status.latestGlobalSeq && (
+              <p className="hint">
+                已提交事件已全部消费（无落后）；写侧有提交中的事务，安全水位暂停在 #
+                {status.lastProcessedSeq}，待其提交后下一次跟进即前移，期间不会漏事件。
+              </p>
+            )}
             <table>
               <thead>
                 <tr>

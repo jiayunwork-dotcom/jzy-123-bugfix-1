@@ -74,6 +74,7 @@ cd backend && npm test
 - **读侧**：投影（projection）把事件流消费成便于查询的视图（账户列表 + 余额汇总），存于独立的读模型表。
 - 命令提交成功后，后端自动让投影**增量消费**新事件；读模型是派生物，滞后时可随时修复。
 - **全量重放**：清空读模型，从头消费整条事件流重新计算。**框架最要命的不变量：重放结果与增量消费结果完全一致**（测试锁定，并与用领域折叠函数独立算出的模型三方对账）。
+- **消费依据是每个聚合各自的连续版本号（per-aggregate stream），不是全局 `global_seq`**：全局序号在 INSERT 时（提交前）分配，并发提交下"序号顺序"与"可见顺序"不一致，按全局序号推进检查点会永久跳过尚不可见的小序号事件。每流版本号由行锁 + 唯一约束保证连续且提交顺序即可见顺序，按流消费无空洞可跳；接口还暴露 `caughtUp / lagEvents / laggingStreams / latestGlobalSeq`，读模型落后时可直接看出。详见 [`docs/projection-ordering.md`](docs/projection-ordering.md)。
 
 ### 业务校验
 
@@ -113,6 +114,7 @@ backend/
     ├── concurrency.test.ts         #   同版本并发提交只有一条成功
     ├── snapshot.test.ts            #   快照重建 ≡ 全量重放（逐字段）
     ├── projection.test.ts          #   投影全量重放 ≡ 增量消费
+    ├── projectionConcurrency.test.ts # 真实库多账户并发写入 ≡ 独立回放；重放并发；重启；滞后可观测
     ├── immutability.test.ts        #   事件不可改、不可删、顺序不变
     ├── domain.test.ts              #   余额不为负等业务校验，不产生事件
     └── http.test.ts                #   API 流程与错误码
@@ -141,7 +143,7 @@ frontend/
 | POST | `/api/aggregates/:id/commands` | 执行命令（校验后生成并追加事件）。Body: `{command, expectedVersion}` |
 | POST | `/api/aggregates/:id/snapshots` | 手动打快照。Body: `{version?}`（缺省当前版本） |
 | GET | `/api/aggregates/:id/snapshots` | 该聚合的全部快照 |
-| GET | `/api/projection/accounts` | 读模型：账户列表 + 余额汇总 + 消费位点 |
+| GET | `/api/projection/accounts` | 读模型：账户列表 + 余额汇总 + 消费位点（另含 `latestGlobalSeq`、`lagEvents`、`caughtUp`、`laggingStreams` 滞后字段） |
 | POST | `/api/projection/accounts/replay` | 对读模型做全量重放并返回结果 |
 
 命令类型：`CreateAccount {owner, initialBalanceCents?}`、`DepositMoney {amountCents}`、`WithdrawMoney {amountCents}`。金额一律以**分**为单位的整数。

@@ -48,7 +48,26 @@ CREATE TABLE IF NOT EXISTS projection_accounts (
 
 CREATE TABLE IF NOT EXISTS projection_checkpoints (
   projection_name TEXT PRIMARY KEY,
+  -- 保守的全局水位：读模型已确定"吃满"的 global_seq 连续前缀上界。
+  -- 注意它不是"见过的最大 seq"：并发提交会让较大 seq 先可见、较小 seq 还在
+  -- 别的事务里没提交，越过去推进就会永久丢事件。该值只推进到最小的未消费
+  -- （或尚不可见）账户事件 seq 之前。
   last_global_seq BIGINT NOT NULL DEFAULT 0
+);
+
+-- 每聚合流检查点：投影按"聚合内连续版本号"消费，而不是按全局序号。
+-- 同一聚合的追加在 aggregates 行锁下串行，UNIQUE(aggregate_id, version)
+-- 兜底，因此每个聚合流的版本号严格连续，且"提交顺序 == 可见顺序"：
+-- 一个流里永远不会出现 v3 已提交可见、而 v2 还在未提交事务里的情况。
+-- 这使得按流推进不可能跳过任何最终提交的事件 —— 这正是旧的"按 global_seq
+-- 消费"在跨聚合并发提交下做不到的（global_seq 在 INSERT 时、而非 COMMIT 时
+-- 分配，序号顺序与可见顺序不一致）。
+CREATE TABLE IF NOT EXISTS projection_stream_checkpoints (
+  projection_name TEXT NOT NULL,
+  aggregate_id    TEXT NOT NULL,
+  last_version    INTEGER NOT NULL DEFAULT 0,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (projection_name, aggregate_id)
 );
 
 CREATE OR REPLACE FUNCTION reject_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$

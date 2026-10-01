@@ -53,9 +53,25 @@ export interface ProjectionAccountRow {
   updatedAt: string;
 }
 
+export interface ProjectionLaggingStream {
+  aggregateId: string;
+  currentVersion: number;
+  processedVersion: number;
+  lagEvents: number;
+}
+
 export interface ProjectionStatus {
   name: string;
+  /** 已确定消费完整的全局序号连续前缀上界（保守水位，提交中有事务时会停在其之前） */
   lastProcessedSeq: number;
+  /** 写侧当前最大全局序号 */
+  latestGlobalSeq: number;
+  /** 已提交但读模型尚未消费的事件条数 */
+  lagEvents: number;
+  /** 读模型是否已追平写侧 */
+  caughtUp: boolean;
+  /** 逐账户落后明细 */
+  laggingStreams: ProjectionLaggingStream[];
   accounts: ProjectionAccountRow[];
   summary: {
     totalAccounts: number;

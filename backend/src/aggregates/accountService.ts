@@ -66,8 +66,9 @@ export class AccountService {
     try {
       await this.projection.processNewEvents();
     } catch (err) {
-      // 读模型是派生物，滞后可修复；不让它拖垮已成功的写入
-      console.error('projection catch-up failed (read model may lag until replay):', err);
+      // 读模型是派生物，滞后可修复：本次事务整体回滚、检查点不前移，
+      // 下一次写入跟进或服务重启时会自动补齐，状态接口也会如实暴露落后。
+      console.error('projection catch-up failed (read model is lagging, will catch up later):', err);
     }
 
     const state = stored.reduce<AccountState>(

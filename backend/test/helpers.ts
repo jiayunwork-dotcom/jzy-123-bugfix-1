@@ -32,7 +32,7 @@ export async function setupTestDeps(): Promise<TestDeps> {
  */
 export async function resetDatabase(pool: pg.Pool): Promise<void> {
   await pool.query(`
-    DROP TABLE IF EXISTS events, snapshots, projection_accounts, projection_checkpoints, aggregates CASCADE;
+    DROP TABLE IF EXISTS events, snapshots, projection_accounts, projection_checkpoints, projection_stream_checkpoints, aggregates CASCADE;
     DROP FUNCTION IF EXISTS reject_event_mutation CASCADE;
   `);
   await runMigrations(pool);
